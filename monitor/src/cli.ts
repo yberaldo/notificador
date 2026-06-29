@@ -87,6 +87,7 @@ function resolveOverallStatus(
 main().catch((error) => {
   const now = new Date().toISOString();
   const message = error instanceof Error ? error.message : String(error);
+  const debugEnabled = /^true$/i.test(process.env.PUBLIC_LISTENER_DEBUG ?? "");
 
   process.stdout.write(
     `${JSON.stringify(
@@ -118,7 +119,7 @@ main().catch((error) => {
           tlsError: null,
           ffprobeSummary: null,
           ffmpegSummary: null,
-          stderrSnippet: message,
+          stderrSnippet: debugEnabled ? message : null,
           stdoutSnippet: null
         },
         timing: {
@@ -128,7 +129,7 @@ main().catch((error) => {
           checkedAt: now
         },
         debug: {
-          enabled: false
+          enabled: debugEnabled
         }
       },
       null,

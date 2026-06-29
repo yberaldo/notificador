@@ -451,7 +451,7 @@ function buildDiagnostic(
       tlsError: evidence.tlsError,
       ffprobeSummary: truncate(evidence.ffprobeSummary),
       ffmpegSummary: truncate(evidence.ffmpegSummary),
-      stderrSnippet: truncate(evidence.stderrSnippet),
+      stderrSnippet: config.debug ? truncate(evidence.stderrSnippet) : null,
       stdoutSnippet: config.debug ? truncate(evidence.stdoutSnippet) : null
     },
     timing: {
