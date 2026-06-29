@@ -1,0 +1,23 @@
+{
+  "name": "@radio-cabrito/public-listener-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI local para verificar se o stream publico da Radio Cabrito esta audivel.",
+  "type": "module",
+  "bin": {
+    "public-listener-check": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/cli.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}

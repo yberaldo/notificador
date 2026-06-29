@@ -1,0 +1,25 @@
+# EXEMPLO APENAS.
+# Nao instalar nem ativar automaticamente nesta etapa.
+# Nao usar em producao continua sem definir intervalo externo ou timer adequado.
+
+[Unit]
+Description=EXEMPLO - Radio Cabrito public-listener-check manual runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=radio-cabrito
+Group=radio-cabrito
+WorkingDirectory=/opt/radio-cabrito/notificador/monitor
+ExecStart=/usr/bin/env bash /opt/radio-cabrito/notificador/monitor/scripts/run-public-listener-once.sh
+StandardOutput=journal
+StandardError=journal
+
+# Ajuste User, Group e o caminho acima para o ambiente real da VPS.
+# Este arquivo e apenas um template de referencia.
+# Nao reinicia servicos, nao entra em loop e nao mexe nos robos.
+# Nao usar root para esta unit quando um usuario dedicado puder ser usado.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+# EXEMPLO APENAS.
+# Nao instalar nem ativar automaticamente nesta etapa.
+# Antes de qualquer uso continuo, revise impacto operacional e janela de execucao.
+
+[Unit]
+Description=EXEMPLO - Timer para o Radio Cabrito public-listener-check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+Unit=notificador-monitor.service
+Persistent=false
+
+# Este timer e apenas um exemplo conservador.
+# Copie e ajuste o nome da unit caso futuramente renomeie o arquivo .service.
+# Mantenha o intervalo acima do timeout configurado para reduzir risco operacional.
+
+[Install]
+WantedBy=timers.target
