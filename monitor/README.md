@@ -148,7 +148,7 @@ Adapters disponiveis:
 
 - log: adapter padrao; escreve um resumo do evento no stderr do processo e marca sucesso
 - noop: nao entrega nada e so simula sucesso, erro retryable ou erro permanente
-- telegram: envia uma mensagem curta via Telegram Bot API usando sendMessage
+- telegram: canal operacional escolhido para notificacoes reais; envia mensagem curta via Telegram Bot API usando sendMessage
 
 Variaveis de ambiente do dispatcher:
 
@@ -197,25 +197,44 @@ PUBLIC_LISTENER_TELEGRAM_MESSAGE_PREFIX="[monitor-vps]" \
 node dist/incidents/dispatch-outbox-cli.js
 ```
 
-O adapter Telegram e opcional. O padrao continua sendo log.
+O adapter Telegram e o canal operacional escolhido para notificacoes externas deste monitor. O padrao de execucao do dispatcher continua sendo log, entao Telegram so entra em uso quando PUBLIC_LISTENER_DISPATCH_ADAPTER=telegram estiver configurada.
+
+PWA e Web Push sairam do escopo deste monitor. O fluxo operacional de notificacao agora considera apenas Telegram como canal externo.
 
 Mensagem atual do Telegram:
 
 - texto simples, sem parse_mode nesta fase
-- diferencia claramente INCIDENTE ABERTO e INCIDENTE RESOLVIDO
-- inclui targetName, targetId, severity, reason, occurredAt, streakCount, incidentId e uma referencia curta do eventId
+- informa apenas se o player ficou offline ou voltou online
+- usa targetName como nome principal do player; se targetName estiver vazio, cai para targetId
+- mantem PUBLIC_LISTENER_TELEGRAM_MESSAGE_PREFIX quando configurado
+
+Exemplo de mensagem para incidente aberto:
+
+```text
+[Radio Cabrito]
+🚨 PLAYER OFFLINE
+Geral / Tudo
+```
+
+Exemplo de mensagem para incidente resolvido:
+
+```text
+[Radio Cabrito]
+✅ PLAYER ONLINE NOVAMENTE
+Geral / Tudo
+```
 
 Seguranca operacional do Telegram:
 
 - o token nao deve aparecer em logs, erros ou documentacao de execucao
 - o dispatcher sanitiza mensagens de erro e nao persiste a URL completa da Bot API
+- o token nao entra na mensagem, no JSON final do dispatcher nem no outbox
 - nao serialize process.env nem bodies sensiveis em troubleshooting
 
 Semantica atual:
 
 - o dispatcher opera em modelo at-least-once
 - se um adapter futuro confirmar envio externo e o processo cair antes de gravar status sent, o mesmo evento pode ser tentado novamente numa rodada futura
-- por isso, adapters externos futuros devem usar chaves estaveis como eventId ou dedupeKey para idempotencia do lado do destino
 - o adapter log e o adapter noop existem exatamente para validar esse fluxo sem disparar notificacoes reais
 - o adapter Telegram pode gerar duplicidade visivel ao operador se a mensagem for enviada com sucesso e o processo cair antes de persistir status sent
 

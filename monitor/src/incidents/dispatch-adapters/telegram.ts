@@ -32,17 +32,11 @@ export function createTelegramDispatchAdapter(config: DispatchTelegramConfig = {
 }
 
 export function buildTelegramMessage(entry: IncidentOutboxEntry, messagePrefix?: string | null): string {
+  const targetLabel = normalizeNonEmptyString(entry.targetName) ?? entry.targetId;
   const lines = [
     normalizeNonEmptyString(messagePrefix),
-    entry.type === "incident_opened" ? "INCIDENTE ABERTO" : "INCIDENTE RESOLVIDO",
-    `alvo: ${entry.targetName}`,
-    `targetId: ${entry.targetId}`,
-    `severity: ${entry.severity}`,
-    `reason: ${entry.reason}`,
-    `occurredAt: ${entry.occurredAt}`,
-    `streakCount: ${entry.streakCount}`,
-    `incidentId: ${entry.incidentId}`,
-    `eventRef: ${buildEventReference(entry.eventId)}`
+    entry.type === "incident_opened" ? "🚨 PLAYER OFFLINE" : "✅ PLAYER ONLINE NOVAMENTE",
+    targetLabel
   ].filter((line): line is string => Boolean(line));
 
   return lines.join("\n");
@@ -241,10 +235,6 @@ function classifyTelegramTransportError(error: unknown, botToken: string): Dispa
   }
 
   return retryableResult("telegram network retryable");
-}
-
-function buildEventReference(eventId: string): string {
-  return eventId.length <= 24 ? eventId : `...${eventId.slice(-24)}`;
 }
 
 function normalizeThreadId(rawValue?: string | null): number | null {

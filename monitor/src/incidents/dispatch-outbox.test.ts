@@ -184,14 +184,48 @@ test("adapter telegram com HTTP 200 ok true marca evento como sent", async () =>
   assert.equal(requests[0]?.url, `https://telegram.example.test/custom-api/bot${botToken}/sendMessage`);
   assert.equal(requests[0]?.body.chat_id, "-100123456");
   assert.equal(requests[0]?.body.message_thread_id, 77);
-  assert.match(String(requests[0]?.body.text ?? ""), /^\[monitor-vps\]/);
-  assert.match(String(requests[0]?.body.text ?? ""), /INCIDENTE ABERTO/);
-  assert.match(String(requests[0]?.body.text ?? ""), /incidentId: geral:fresh/);
+  assert.equal(String(requests[0]?.body.text ?? ""), "[monitor-vps]\n🚨 PLAYER OFFLINE\nGeral / Tudo");
+  assert.match(String(requests[0]?.body.text ?? ""), /PLAYER OFFLINE/);
+  assert.match(String(requests[0]?.body.text ?? ""), /Geral \/ Tudo/);
+  assert.doesNotMatch(String(requests[0]?.body.text ?? ""), /severity|reason|occurredAt|incidentId|eventId|streakCount/);
   assert.doesNotMatch(String(requests[0]?.body.text ?? ""), new RegExp(botToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(botToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   const outbox = await readOutbox(outboxFilePath);
   assert.equal(outbox.entries[0]?.status, "sent");
+});
+
+test("adapter telegram gera mensagem simples para incident_resolved", async () => {
+  const directoryPath = await createTemporaryTestDirectory("dispatch-telegram-resolved-message");
+  const outboxFilePath = path.join(directoryPath, "data", "notifiable-events-outbox.json");
+  const requests: CapturedTelegramRequest[] = [];
+
+  await writeOutbox(
+    outboxFilePath,
+    [
+      createOutboxEntry({
+        type: "incident_resolved",
+        severity: "none",
+        reason: "audio_decoded_without_continuous_silence"
+      })
+    ]
+  );
+
+  const result = await dispatchIncidentOutbox({
+    outboxFilePath,
+    adapter: "telegram",
+    telegram: {
+      botToken: "123456:RESOLVED_SEGREDO",
+      chatId: "-100123456",
+      fetchImpl: createTelegramFetchMock(createJsonResponse(200, { ok: true, result: { message_id: 2 } }), requests)
+    }
+  });
+
+  assert.equal(result.summary.sentCount, 1);
+  assert.equal(String(requests[0]?.body.text ?? ""), "✅ PLAYER ONLINE NOVAMENTE\nGeral / Tudo");
+  assert.match(String(requests[0]?.body.text ?? ""), /PLAYER ONLINE NOVAMENTE/);
+  assert.match(String(requests[0]?.body.text ?? ""), /Geral \/ Tudo/);
+  assert.doesNotMatch(String(requests[0]?.body.text ?? ""), /severity|reason|occurredAt|incidentId|eventId|streakCount/);
 });
 
 test("token ausente gera erro critico controlado sem tocar o outbox", async () => {
