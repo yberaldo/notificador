@@ -1,13 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
 import {
   createEmptyIncidentOutboxSnapshot,
   resolveIncidentOutboxPath,
   upsertIncidentOutboxEntries
 } from "./outbox-store.js";
+import { createTemporaryTestDirectory, withWorkingDirectory } from "./test-helpers.js";
 import type { NotifiableEventOutboxPayload } from "./outbox-types.js";
 
 function createEvent(overrides: Partial<NotifiableEventOutboxPayload> = {}): NotifiableEventOutboxPayload {
@@ -28,11 +27,14 @@ function createEvent(overrides: Partial<NotifiableEventOutboxPayload> = {}): Not
 }
 
 test("caminho relativo configurado do outbox resolve a partir do diretorio de execucao", async () => {
-  const executionDirectory = await mkdtemp(path.join(os.tmpdir(), "radio-cabrito-relative-outbox-"));
-  const resolved = resolveIncidentOutboxPath(path.join("tmp", "sim", "notifiable-events-outbox.json"), executionDirectory);
+  const executionDirectory = await createTemporaryTestDirectory("relative-outbox");
 
-  assert.equal(resolved.filePath, path.resolve(executionDirectory, "tmp", "sim", "notifiable-events-outbox.json"));
-  assert.equal(resolved.displayPath, path.resolve(executionDirectory, "tmp", "sim", "notifiable-events-outbox.json"));
+  await withWorkingDirectory(executionDirectory, async () => {
+    const resolved = resolveIncidentOutboxPath(path.join("tmp", "sim", "notifiable-events-outbox.json"));
+
+    assert.equal(resolved.filePath, path.resolve(executionDirectory, "tmp", "sim", "notifiable-events-outbox.json"));
+    assert.equal(resolved.displayPath, path.resolve(executionDirectory, "tmp", "sim", "notifiable-events-outbox.json"));
+  });
 });
 
 test("evento novo entra como pending no outbox", () => {

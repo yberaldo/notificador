@@ -1,12 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
 import path from "node:path";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { PublicListenerMultiDiagnostic, PublicListenerStatus, Severity } from "../checks/public-listener-check/types.js";
 import { evaluatePublicListenerIncidents } from "./evaluate-public-listener-incidents.js";
 import { DEFAULT_INCIDENT_OUTBOX_PATH } from "./outbox-store.js";
 import { DEFAULT_INCIDENT_STATE_PATH, resolveIncidentStatePath } from "./state-store.js";
+import {
+  assertProductionFilesUntouched,
+  createIncidentTestContext,
+  createTemporaryTestDirectory,
+  snapshotOptionalFile,
+  snapshotProductionFiles,
+  withWorkingDirectory
+} from "./test-helpers.js";
 import type { IncidentOutboxSnapshot } from "./outbox-types.js";
 import type { IncidentStateSnapshot } from "./types.js";
 
@@ -18,13 +25,6 @@ interface SyntheticTargetDiagnostic {
   reason?: string;
   streamUrl?: string;
   host?: string;
-}
-
-interface OptionalFileSnapshot {
-  exists: boolean;
-  content: string | null;
-  size: number | null;
-  mtimeMs: number | null;
 }
 
 function createMultiDiagnostic(
@@ -110,59 +110,24 @@ function createMultiDiagnosticWithTargets(targets: SyntheticTargetDiagnostic[]):
   };
 }
 
-async function createStateFilePath(name: string): Promise<string> {
-  const directoryPath = await mkdtemp(path.join(os.tmpdir(), `radio-cabrito-${name}-`));
-  return path.join(directoryPath, "data", "incidents-state.json");
-}
-
-async function createOutboxFilePath(name: string): Promise<string> {
-  const directoryPath = await mkdtemp(path.join(os.tmpdir(), `radio-cabrito-${name}-`));
-  return path.join(directoryPath, "data", "notifiable-events-outbox.json");
-}
-
-async function snapshotOptionalFile(filePath: string): Promise<OptionalFileSnapshot> {
-  try {
-    const [content, metadata] = await Promise.all([readFile(filePath, "utf8"), stat(filePath)]);
-
-    return {
-      exists: true,
-      content,
-      size: metadata.size,
-      mtimeMs: metadata.mtimeMs
-    };
-  } catch (error) {
-    if (isMissingFile(error)) {
-      return {
-        exists: false,
-        content: null,
-        size: null,
-        mtimeMs: null
-      };
-    }
-
-    throw error;
-  }
-}
-
-function isMissingFile(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT");
-}
-
 test("caminho relativo configurado resolve a partir do diretorio de execucao", async () => {
-  const executionDirectory = await mkdtemp(path.join(os.tmpdir(), "radio-cabrito-relative-state-"));
-  const resolved = resolveIncidentStatePath(path.join("tmp", "sim", "incidents-state.json"), executionDirectory);
+  const executionDirectory = await createTemporaryTestDirectory("relative-state");
 
-  assert.equal(resolved.filePath, path.resolve(executionDirectory, "tmp", "sim", "incidents-state.json"));
-  assert.equal(resolved.displayPath, path.resolve(executionDirectory, "tmp", "sim", "incidents-state.json"));
+  await withWorkingDirectory(executionDirectory, async () => {
+    const resolved = resolveIncidentStatePath(path.join("tmp", "sim", "incidents-state.json"));
+
+    assert.equal(resolved.filePath, path.resolve(executionDirectory, "tmp", "sim", "incidents-state.json"));
+    assert.equal(resolved.displayPath, path.resolve(executionDirectory, "tmp", "sim", "incidents-state.json"));
+  });
 });
 
 test("state path configurado grava fora do caminho padrao", async () => {
-  const stateFilePath = await createStateFilePath("configured-path");
+  const { stateFilePath, options } = await createIncidentTestContext("configured-path");
   const defaultStateBefore = await snapshotOptionalFile(DEFAULT_INCIDENT_STATE_PATH);
 
   const evaluation = await evaluatePublicListenerIncidents(
     createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
-    { stateFilePath }
+    options
   );
 
   assert.equal(evaluation.incidentEvaluation.stateStore.path, stateFilePath);
@@ -177,18 +142,11 @@ test("state path configurado grava fora do caminho padrao", async () => {
 });
 
 test("outbox path configurado grava fora do caminho padrao", async () => {
-  const stateFilePath = await createStateFilePath("configured-outbox-state");
-  const outboxFilePath = await createOutboxFilePath("configured-outbox-path");
+  const { outboxFilePath, options } = await createIncidentTestContext("configured-outbox-path");
   const defaultOutboxBefore = await snapshotOptionalFile(DEFAULT_INCIDENT_OUTBOX_PATH);
 
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath,
-    outboxFilePath
-  });
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
 
   assert.equal(evaluation.incidentEvaluation.outbox.path, outboxFilePath);
   assert.equal(evaluation.incidentEvaluation.outbox.writeSucceeded, true);
@@ -204,38 +162,28 @@ test("outbox path configurado grava fora do caminho padrao", async () => {
 });
 
 test("healthy -> timeout -> timeout abre incidente critico", async () => {
-  const stateFilePath = await createStateFilePath("critical-open");
-  const outboxFilePath = await createOutboxFilePath("critical-open");
+  const { outboxFilePath, options } = await createIncidentTestContext("critical-open");
 
-  let evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  let evaluation = await evaluatePublicListenerIncidents(
+    createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
+    options
+  );
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "none");
 
-  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "none");
   assert.equal(evaluation.incidentEvaluation.targets[0]?.consecutiveFailures, 1);
 
-  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
   assert.equal(evaluation.notifiableEvents.length, 1);
   assert.equal(evaluation.notifiableEvents[0]?.type, "incident_opened");
   assert.equal(evaluation.notifiableEvents[0]?.severity, "critical");
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "opened");
   assert.equal(evaluation.incidentEvaluation.targets[0]?.incidentState, "open");
 
-  const repeatedEvaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  const repeatedEvaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
 
   assert.equal(repeatedEvaluation.incidentEvaluation.outbox.queuedCount, 0);
   assert.equal(repeatedEvaluation.incidentEvaluation.outbox.duplicateCount, 0);
@@ -246,13 +194,9 @@ test("healthy -> timeout -> timeout abre incidente critico", async () => {
 });
 
 test("falha estrutural repetida nao duplica outbox e atualiza lastSeenAt", async () => {
-  const stateFilePath = await createStateFilePath("structural-dedupe");
-  const outboxFilePath = await createOutboxFilePath("structural-dedupe");
+  const { outboxFilePath, options } = await createIncidentTestContext("structural-dedupe");
 
-  let evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  let evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), options);
 
   assert.equal(evaluation.notifiableEvents.length, 1);
   assert.equal(evaluation.incidentEvaluation.outbox.queuedCount, 1);
@@ -262,10 +206,7 @@ test("falha estrutural repetida nao duplica outbox e atualiza lastSeenAt", async
   const firstEntry = firstOutbox.entries[0];
   assert.equal(firstEntry?.status, "pending");
 
-  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), options);
 
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.outbox.queuedCount, 0);
@@ -277,15 +218,14 @@ test("falha estrutural repetida nao duplica outbox e atualiza lastSeenAt", async
 });
 
 test("arquivo de outbox corrompido nao quebra a avaliacao", async () => {
-  const stateFilePath = await createStateFilePath("corrupted-outbox-state");
-  const outboxFilePath = await createOutboxFilePath("corrupted-outbox");
+  const { stateFilePath, outboxFilePath, options } = await createIncidentTestContext("corrupted-outbox");
   await mkdir(path.dirname(outboxFilePath), { recursive: true });
   await writeFile(outboxFilePath, "{ invalid json", "utf8");
 
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath,
-    outboxFilePath
-  });
+  const evaluation = await evaluatePublicListenerIncidents(
+    createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
+    options
+  );
 
   assert.equal(evaluation.incidentEvaluation.outbox.recoveredFromCorruption, true);
   assert.equal(evaluation.incidentEvaluation.outbox.writeSucceeded, true);
@@ -296,38 +236,25 @@ test("arquivo de outbox corrompido nao quebra a avaliacao", async () => {
 });
 
 test("outbox e salvo antes do incident state e erro no outbox impede salvar state com evento novo", async () => {
-  const stateFilePath = await createStateFilePath("ordering");
-  const outboxFilePath = await createOutboxFilePath("ordering");
   const callOrder: string[] = [];
-
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), {
-    stateFilePath,
-    outboxFilePath,
-    persistence: {
-      async loadIncidentState(filePath, template) {
-        const { loadIncidentState } = await import("./state-store.js");
-        return loadIncidentState(filePath, template);
-      },
-      async loadIncidentOutbox(filePath, updatedAt) {
-        const { loadIncidentOutbox } = await import("./outbox-store.js");
-        return loadIncidentOutbox(filePath, updatedAt);
-      },
-      async saveIncidentOutbox() {
-        callOrder.push("outbox");
-        return {
-          writeSucceeded: false,
-          writeError: "simulated outbox failure"
-        };
-      },
-      async saveIncidentState() {
-        callOrder.push("state");
-        return {
-          writeSucceeded: true,
-          writeError: null
-        };
-      }
+  const { options } = await createIncidentTestContext("ordering", {
+    async saveIncidentOutbox() {
+      callOrder.push("outbox");
+      return {
+        writeSucceeded: false,
+        writeError: "simulated outbox failure"
+      };
+    },
+    async saveIncidentState() {
+      callOrder.push("state");
+      return {
+        writeSucceeded: true,
+        writeError: null
+      };
     }
   });
+
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), options);
 
   assert.deepEqual(callOrder, ["outbox"]);
   assert.equal(evaluation.notifiableEvents.length, 1);
@@ -338,37 +265,27 @@ test("outbox e salvo antes do incident state e erro no outbox impede salvar stat
 });
 
 test("se nao ha evento novo, falha no outbox nao bloqueia persistencia do state", async () => {
-  const stateFilePath = await createStateFilePath("ordering-no-new-events");
-  const outboxFilePath = await createOutboxFilePath("ordering-no-new-events");
   const savedStates: IncidentStateSnapshot[] = [];
-
-  const firstEvaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath,
-    outboxFilePath,
-    persistence: {
-      async loadIncidentState(filePath, template) {
-        const { loadIncidentState } = await import("./state-store.js");
-        return loadIncidentState(filePath, template);
-      },
-      async loadIncidentOutbox(filePath, updatedAt) {
-        const { loadIncidentOutbox } = await import("./outbox-store.js");
-        return loadIncidentOutbox(filePath, updatedAt);
-      },
-      async saveIncidentOutbox() {
-        return {
-          writeSucceeded: false,
-          writeError: "simulated outbox failure"
-        };
-      },
-      async saveIncidentState(_filePath, state) {
-        savedStates.push(state);
-        return {
-          writeSucceeded: true,
-          writeError: null
-        };
-      }
+  const { options } = await createIncidentTestContext("ordering-no-new-events", {
+    async saveIncidentOutbox() {
+      return {
+        writeSucceeded: false,
+        writeError: "simulated outbox failure"
+      };
+    },
+    async saveIncidentState(_filePath, state) {
+      savedStates.push(state);
+      return {
+        writeSucceeded: true,
+        writeError: null
+      };
     }
   });
+
+  const firstEvaluation = await evaluatePublicListenerIncidents(
+    createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
+    options
+  );
 
   assert.equal(firstEvaluation.notifiableEvents.length, 0);
   assert.equal(firstEvaluation.incidentEvaluation.outbox.queuedCount, 0);
@@ -376,21 +293,13 @@ test("se nao ha evento novo, falha no outbox nao bloqueia persistencia do state"
 });
 
 test("healthy -> silent -> silent -> silent abre incidente warning", async () => {
-  const stateFilePath = await createStateFilePath("warning-open");
+  const { options } = await createIncidentTestContext("warning-open");
 
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), {
-    stateFilePath
-  });
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), options);
 
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), {
-    stateFilePath
-  });
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), options);
 
   assert.equal(evaluation.notifiableEvents.length, 1);
   assert.equal(evaluation.notifiableEvents[0]?.type, "incident_opened");
@@ -400,18 +309,15 @@ test("healthy -> silent -> silent -> silent abre incidente warning", async () =>
 });
 
 test("incidente aberto -> healthy nao fecha na primeira rodada", async () => {
-  const stateFilePath = await createStateFilePath("recovering");
+  const { options } = await createIncidentTestContext("recovering");
 
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
-  });
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
 
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath
-  });
+  const evaluation = await evaluatePublicListenerIncidents(
+    createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
+    options
+  );
 
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "recovering");
@@ -420,21 +326,16 @@ test("incidente aberto -> healthy nao fecha na primeira rodada", async () => {
 });
 
 test("incidente aberto -> healthy -> healthy resolve", async () => {
-  const stateFilePath = await createStateFilePath("resolved");
+  const { options } = await createIncidentTestContext("resolved");
 
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath
-  });
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), options);
 
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath
-  });
+  const evaluation = await evaluatePublicListenerIncidents(
+    createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
+    options
+  );
 
   assert.equal(evaluation.notifiableEvents.length, 1);
   assert.equal(evaluation.notifiableEvents[0]?.type, "incident_resolved");
@@ -443,21 +344,13 @@ test("incidente aberto -> healthy -> healthy resolve", async () => {
 });
 
 test("warning aberto -> falha critica mantem incidente aberto e atualiza status corrente", async () => {
-  const stateFilePath = await createStateFilePath("warning-to-critical");
+  const { stateFilePath, options } = await createIncidentTestContext("warning-to-critical");
 
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), {
-    stateFilePath
-  });
-  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), {
-    stateFilePath
-  });
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), options);
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("silent", "warning", "continuous_silence_detected"), options);
 
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
-  });
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), options);
 
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "kept_open");
@@ -471,13 +364,14 @@ test("warning aberto -> falha critica mantem incidente aberto e atualiza status 
 });
 
 test("arquivo de estado corrompido nao quebra a avaliacao", async () => {
-  const stateFilePath = await createStateFilePath("corrupted-state");
+  const { stateFilePath, options } = await createIncidentTestContext("corrupted-state");
   await mkdir(path.dirname(stateFilePath), { recursive: true });
   await writeFile(stateFilePath, "{ invalid json", "utf8");
 
-  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath
-  });
+  const evaluation = await evaluatePublicListenerIncidents(
+    createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"),
+    options
+  );
 
   assert.equal(evaluation.incidentEvaluation.stateStore.recoveredFromCorruption, true);
   assert.equal(evaluation.incidentEvaluation.stateStore.writeSucceeded, true);
@@ -486,8 +380,9 @@ test("arquivo de estado corrompido nao quebra a avaliacao", async () => {
   assert.equal(rewritten.schemaVersion, 1);
 });
 
-test("targets obsoletos saem do snapshot sem gerar evento", async () => {
-  const stateFilePath = await createStateFilePath("stale-targets");
+test("testes nao escrevem nos caminhos reais de producao", async () => {
+  const productionBefore = await snapshotProductionFiles();
+  const { outboxFilePath, options } = await createIncidentTestContext("production-path-guard");
 
   await evaluatePublicListenerIncidents(
     createMultiDiagnosticWithTargets([
@@ -499,7 +394,7 @@ test("targets obsoletos saem do snapshot sem gerar evento", async () => {
         reason: "operation_timeout"
       }
     ]),
-    { stateFilePath }
+    options
   );
   await evaluatePublicListenerIncidents(
     createMultiDiagnosticWithTargets([
@@ -511,7 +406,42 @@ test("targets obsoletos saem do snapshot sem gerar evento", async () => {
         reason: "operation_timeout"
       }
     ]),
-    { stateFilePath }
+    options
+  );
+
+  const storedOutbox = JSON.parse(await readFile(outboxFilePath, "utf8")) as IncidentOutboxSnapshot;
+  assert.equal(storedOutbox.entries.length, 1);
+  assert.equal(storedOutbox.entries[0]?.targetId, "sim-geral");
+  assert.deepEqual(await snapshotProductionFiles(), productionBefore);
+  await assertProductionFilesUntouched();
+});
+
+test("targets obsoletos saem do snapshot sem gerar evento", async () => {
+  const { stateFilePath, options } = await createIncidentTestContext("stale-targets");
+
+  await evaluatePublicListenerIncidents(
+    createMultiDiagnosticWithTargets([
+      {
+        targetId: "sim-geral",
+        targetName: "Sim Geral",
+        status: "timeout",
+        severity: "critical",
+        reason: "operation_timeout"
+      }
+    ]),
+    options
+  );
+  await evaluatePublicListenerIncidents(
+    createMultiDiagnosticWithTargets([
+      {
+        targetId: "sim-geral",
+        targetName: "Sim Geral",
+        status: "timeout",
+        severity: "critical",
+        reason: "operation_timeout"
+      }
+    ]),
+    options
   );
 
   const evaluation = await evaluatePublicListenerIncidents(
@@ -526,7 +456,7 @@ test("targets obsoletos saem do snapshot sem gerar evento", async () => {
         host: "scrc.radiocabrito.com"
       }
     ]),
-    { stateFilePath }
+    options
   );
 
   assert.equal(evaluation.notifiableEvents.length, 0);
