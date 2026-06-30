@@ -10,9 +10,19 @@ export const DEFAULT_DISPATCH_MAX_ATTEMPTS = 10;
 export const DEFAULT_DISPATCH_ADAPTER = "log";
 export const DEFAULT_DISPATCH_NOOP_MODE = "success";
 
-export type DispatchAdapterName = "log" | "noop";
+export type DispatchAdapterName = "log" | "noop" | "telegram";
 export type DispatchNoopMode = "success" | "retryable_error" | "permanent_error";
 export type DispatchAdapterOutcome = "success" | "retryable_error" | "permanent_error";
+
+export interface DispatchTelegramConfig {
+  botToken?: string | null;
+  chatId?: string | null;
+  apiBaseUrl?: string | null;
+  messagePrefix?: string | null;
+  threadId?: string | null;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
 
 export interface DispatchAdapterResult {
   outcome: DispatchAdapterOutcome;
@@ -29,6 +39,7 @@ export interface DispatchOutboxOptions {
   outboxFilePath?: string | null;
   adapter?: DispatchAdapterName;
   noopMode?: DispatchNoopMode;
+  telegram?: DispatchTelegramConfig;
   lockTtlMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;

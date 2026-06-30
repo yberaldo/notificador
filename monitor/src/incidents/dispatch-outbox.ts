@@ -1,6 +1,7 @@
 import { acquireDispatchLock } from "./dispatch-lock.js";
 import { createLogDispatchAdapter } from "./dispatch-adapters/log.js";
 import { createNoopDispatchAdapter } from "./dispatch-adapters/noop.js";
+import { createTelegramDispatchAdapter } from "./dispatch-adapters/telegram.js";
 import {
   DEFAULT_DISPATCH_ADAPTER,
   DEFAULT_DISPATCH_LOCK_TTL_MS,
@@ -17,7 +18,8 @@ import {
   type DispatchOutboxOptions,
   type DispatchOutboxResult,
   type DispatchProcessedEvent,
-  type DispatchSummary
+  type DispatchSummary,
+  type DispatchTelegramConfig
 } from "./dispatch-types.js";
 import { loadIncidentOutbox, resolveIncidentOutboxPath, saveIncidentOutbox } from "./outbox-store.js";
 import type { IncidentOutboxEntry, IncidentOutboxSnapshot } from "./outbox-types.js";
@@ -26,6 +28,7 @@ interface NormalizedDispatchOptions {
   outboxFilePath?: string | null;
   adapter: DispatchAdapterName;
   noopMode: DispatchOutboxOptions["noopMode"];
+  telegram?: DispatchTelegramConfig;
   lockTtlMs: number;
   retryBaseMs: number;
   retryMaxMs: number;
@@ -40,8 +43,17 @@ export async function dispatchIncidentOutbox(options: DispatchOutboxOptions = {}
   const normalizedOptions = normalizeDispatchOptions(options);
   const outboxPath = resolveIncidentOutboxPath(normalizedOptions.outboxFilePath).filePath;
   const lockPath = `${outboxPath}.lock`;
-  const adapter = normalizedOptions.adapterOverride ?? resolveDispatchAdapter(normalizedOptions.adapter, normalizedOptions.noopMode);
-  const result = createDispatchOutboxResult(outboxPath, adapter.name, lockPath);
+  const result = createDispatchOutboxResult(outboxPath, normalizedOptions.adapter, lockPath);
+  let adapter: DispatchAdapter;
+
+  try {
+    adapter = normalizedOptions.adapterOverride
+      ?? resolveDispatchAdapter(normalizedOptions.adapter, normalizedOptions.noopMode, normalizedOptions.telegram);
+  } catch (error) {
+    setCriticalError(result, formatError(error));
+    return result;
+  }
+
   const lockHandle = await acquireDispatchLock({
     filePath: lockPath,
     ttlMs: normalizedOptions.lockTtlMs,
@@ -179,6 +191,7 @@ function normalizeDispatchOptions(options: DispatchOutboxOptions): NormalizedDis
     outboxFilePath: options.outboxFilePath,
     adapter: options.adapter ?? DEFAULT_DISPATCH_ADAPTER,
     noopMode: options.noopMode ?? DEFAULT_DISPATCH_NOOP_MODE,
+    telegram: options.telegram,
     lockTtlMs: normalizePositiveInteger(options.lockTtlMs, DEFAULT_DISPATCH_LOCK_TTL_MS),
     retryBaseMs,
     retryMaxMs,
@@ -190,7 +203,15 @@ function normalizeDispatchOptions(options: DispatchOutboxOptions): NormalizedDis
   };
 }
 
-function resolveDispatchAdapter(adapterName: DispatchAdapterName, noopMode: DispatchOutboxOptions["noopMode"]): DispatchAdapter {
+function resolveDispatchAdapter(
+  adapterName: DispatchAdapterName,
+  noopMode: DispatchOutboxOptions["noopMode"],
+  telegram?: DispatchTelegramConfig
+): DispatchAdapter {
+  if (adapterName === "telegram") {
+    return createTelegramDispatchAdapter(telegram);
+  }
+
   if (adapterName === "noop") {
     return createNoopDispatchAdapter(noopMode ?? DEFAULT_DISPATCH_NOOP_MODE);
   }

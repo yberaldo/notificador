@@ -2,6 +2,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchIncidentOutbox } from "./dispatch-outbox.js";
+import { DEFAULT_TELEGRAM_API_BASE_URL, DEFAULT_TELEGRAM_TIMEOUT_MS } from "./dispatch-adapters/telegram.js";
 import {
   DEFAULT_DISPATCH_ADAPTER,
   DEFAULT_DISPATCH_LOCK_TTL_MS,
@@ -24,6 +25,7 @@ interface DispatchCliRunOptions {
   stderr?: { write(chunk: string): unknown };
   now?: () => Date;
   pid?: number;
+  telegramFetchImpl?: typeof fetch;
 }
 
 export async function runDispatchOutboxCli(options: DispatchCliRunOptions = {}): Promise<number> {
@@ -33,6 +35,14 @@ export async function runDispatchOutboxCli(options: DispatchCliRunOptions = {}):
 
   try {
     const config = loadDispatchOutboxCliConfig(env);
+
+    if (options.telegramFetchImpl) {
+      config.telegram = {
+        ...(config.telegram ?? {}),
+        fetchImpl: options.telegramFetchImpl
+      };
+    }
+
     const result = await dispatchIncidentOutbox({
       ...config,
       now: options.now,
@@ -59,6 +69,14 @@ export function loadDispatchOutboxCliConfig(env: NodeJS.ProcessEnv): DispatchOut
     outboxFilePath: env.PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH,
     adapter,
     noopMode: readNoopMode(env.PUBLIC_LISTENER_DISPATCH_NOOP_MODE),
+    telegram: {
+      botToken: env.PUBLIC_LISTENER_TELEGRAM_BOT_TOKEN,
+      chatId: env.PUBLIC_LISTENER_TELEGRAM_CHAT_ID,
+      apiBaseUrl: env.PUBLIC_LISTENER_TELEGRAM_API_BASE_URL || DEFAULT_TELEGRAM_API_BASE_URL,
+      messagePrefix: env.PUBLIC_LISTENER_TELEGRAM_MESSAGE_PREFIX,
+      threadId: env.PUBLIC_LISTENER_TELEGRAM_THREAD_ID,
+      timeoutMs: readPositiveInteger(env.PUBLIC_LISTENER_TELEGRAM_TIMEOUT_MS, DEFAULT_TELEGRAM_TIMEOUT_MS)
+    },
     lockTtlMs: readPositiveInteger(env.PUBLIC_LISTENER_DISPATCH_LOCK_TTL_MS, DEFAULT_DISPATCH_LOCK_TTL_MS),
     retryBaseMs,
     retryMaxMs: Math.max(retryBaseMs, readPositiveInteger(env.PUBLIC_LISTENER_DISPATCH_RETRY_MAX_MS, DEFAULT_DISPATCH_RETRY_MAX_MS)),
@@ -68,7 +86,11 @@ export function loadDispatchOutboxCliConfig(env: NodeJS.ProcessEnv): DispatchOut
 
 function readDispatchAdapter(rawValue: string | undefined): DispatchAdapterName {
   const normalized = rawValue?.trim().toLowerCase();
-  return normalized === "noop" ? "noop" : DEFAULT_DISPATCH_ADAPTER;
+  if (normalized === "noop" || normalized === "telegram") {
+    return normalized;
+  }
+
+  return DEFAULT_DISPATCH_ADAPTER;
 }
 
 function readNoopMode(rawValue: string | undefined): DispatchNoopMode {

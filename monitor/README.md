@@ -144,24 +144,40 @@ Comportamento atual do dispatcher:
 - se o evento ja tiver atingido o limite de tentativas, ele tambem vira discarded sem nova chamada ao adapter
 - nesta fase nao existe status intermediario processing
 
-Adapters locais disponiveis:
+Adapters disponiveis:
 
 - log: adapter padrao; escreve um resumo do evento no stderr do processo e marca sucesso
 - noop: nao entrega nada e so simula sucesso, erro retryable ou erro permanente
+- telegram: envia uma mensagem curta via Telegram Bot API usando sendMessage
 
 Variaveis de ambiente do dispatcher:
 
-- PUBLIC_LISTENER_DISPATCH_ADAPTER=log|noop
+- PUBLIC_LISTENER_DISPATCH_ADAPTER=log|noop|telegram
 - PUBLIC_LISTENER_DISPATCH_NOOP_MODE=success|retryable_error|permanent_error
 - PUBLIC_LISTENER_DISPATCH_LOCK_TTL_MS, padrao 600000
 - PUBLIC_LISTENER_DISPATCH_RETRY_BASE_MS, padrao 300000
 - PUBLIC_LISTENER_DISPATCH_RETRY_MAX_MS, padrao 21600000
 - PUBLIC_LISTENER_DISPATCH_MAX_ATTEMPTS, padrao 10
 
+Variaveis opcionais do adapter Telegram:
+
+- PUBLIC_LISTENER_TELEGRAM_BOT_TOKEN
+- PUBLIC_LISTENER_TELEGRAM_CHAT_ID
+- PUBLIC_LISTENER_TELEGRAM_API_BASE_URL, padrao https://api.telegram.org
+- PUBLIC_LISTENER_TELEGRAM_MESSAGE_PREFIX
+- PUBLIC_LISTENER_TELEGRAM_THREAD_ID
+- PUBLIC_LISTENER_TELEGRAM_TIMEOUT_MS, padrao 10000
+
 Exemplos:
 
 ```bash
 npm run dispatch:outbox
+```
+
+Para obter JSON puro do dispatcher, prefira executar o binario Node diretamente, sem o cabecalho do npm:
+
+```bash
+node dist/incidents/dispatch-outbox-cli.js
 ```
 
 ```bash
@@ -170,12 +186,38 @@ PUBLIC_LISTENER_DISPATCH_NOOP_MODE=retryable_error \
 node dist/incidents/dispatch-outbox-cli.js
 ```
 
+Exemplo de teste do Telegram com outbox temporario:
+
+```bash
+PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH=/tmp/notifiable-events-outbox.telegram-test.json \
+PUBLIC_LISTENER_DISPATCH_ADAPTER=telegram \
+PUBLIC_LISTENER_TELEGRAM_BOT_TOKEN=000000:token-de-teste \
+PUBLIC_LISTENER_TELEGRAM_CHAT_ID=-1001234567890 \
+PUBLIC_LISTENER_TELEGRAM_MESSAGE_PREFIX="[monitor-vps]" \
+node dist/incidents/dispatch-outbox-cli.js
+```
+
+O adapter Telegram e opcional. O padrao continua sendo log.
+
+Mensagem atual do Telegram:
+
+- texto simples, sem parse_mode nesta fase
+- diferencia claramente INCIDENTE ABERTO e INCIDENTE RESOLVIDO
+- inclui targetName, targetId, severity, reason, occurredAt, streakCount, incidentId e uma referencia curta do eventId
+
+Seguranca operacional do Telegram:
+
+- o token nao deve aparecer em logs, erros ou documentacao de execucao
+- o dispatcher sanitiza mensagens de erro e nao persiste a URL completa da Bot API
+- nao serialize process.env nem bodies sensiveis em troubleshooting
+
 Semantica atual:
 
 - o dispatcher opera em modelo at-least-once
 - se um adapter futuro confirmar envio externo e o processo cair antes de gravar status sent, o mesmo evento pode ser tentado novamente numa rodada futura
 - por isso, adapters externos futuros devem usar chaves estaveis como eventId ou dedupeKey para idempotencia do lado do destino
 - o adapter log e o adapter noop existem exatamente para validar esse fluxo sem disparar notificacoes reais
+- o adapter Telegram pode gerar duplicidade visivel ao operador se a mensagem for enviada com sucesso e o processo cair antes de persistir status sent
 
 Politica atual:
 
