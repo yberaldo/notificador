@@ -92,6 +92,119 @@ O campo summary resume o estado final do lote:
 
 O exit code e 0 somente quando todos os canais estiverem healthy. Se um ou mais canais falharem, a CLI encerra com 1.
 
+## Camada local de incidentes
+
+Sem alterar o check principal, a CLI agora faz um pos-processamento local do diagnostico e persiste um snapshot em [data/incidents-state.json](data/incidents-state.json).
+
+- o estado e snapshot, nao log infinito
+- a pasta data e criada automaticamente quando necessario
+- a escrita usa arquivo temporario, rename e backup unico em [data/incidents-state.json.bak](data/incidents-state.json.bak)
+- o snapshot nao persiste evidence, stderrSnippet nem stdoutSnippet
+
+Politica atual:
+
+- falhas estruturais locais do monitor abrem com 1 ocorrencia
+- falhas criticas de transporte, protocolo, bytes e decode abrem com 2 falhas consecutivas
+- silent e stalled abrem com 3 falhas consecutivas
+- qualquer incidente resolve com 2 sucessos consecutivos
+
+As falhas estruturais sao detectadas por reason. Nesta etapa, os motivos tratados como estruturais sao:
+
+- missing_stream_url
+- unsupported_protocol
+- invalid_stream_url
+- ffmpeg_not_available
+- ffprobe_not_available
+- cli_unhandled_error
+- tls_required_but_url_is_not_https
+
+## JSON enriquecido
+
+A CLI preserva o JSON atual e adiciona dois campos no topo:
+
+- incidentEvaluation
+- notifiableEvents
+
+Formato resumido:
+
+```json
+{
+	"incidentEvaluation": {
+		"schemaVersion": 1,
+		"evaluatedAt": "2026-06-29T12:00:00.000Z",
+		"checkName": "public-listener-check",
+		"checkVersion": "v1",
+		"policySnapshot": {
+			"structuralOpenThreshold": 1,
+			"criticalOpenThreshold": 2,
+			"qualityOpenThreshold": 3,
+			"resolveAfterConsecutiveSuccesses": 2,
+			"structuralReasons": ["missing_stream_url"],
+			"qualityStatuses": ["silent", "stalled"]
+		},
+		"summary": {
+			"targetCount": 3,
+			"openIncidentCount": 1,
+			"openedCount": 1,
+			"keptOpenCount": 0,
+			"recoveringCount": 0,
+			"resolvedCount": 0,
+			"noneCount": 2
+		},
+		"stateStore": {
+			"path": "data/incidents-state.json",
+			"loadSource": "primary",
+			"recoveredFromCorruption": false,
+			"loadError": null,
+			"writeSucceeded": true,
+			"writeError": null
+		},
+		"targets": [
+			{
+				"targetId": "geral",
+				"targetName": "Geral / Tudo",
+				"streamUrl": "https://scrc.radiocabrito.com:13386/;",
+				"status": "timeout",
+				"reason": "operation_timeout",
+				"severity": "critical",
+				"failureClass": "critical",
+				"structuralFailure": false,
+				"transition": "opened",
+				"incidentState": "open",
+				"incidentId": "geral:2026-06-29T12:00:00.000Z",
+				"openedAt": "2026-06-29T12:00:00.000Z",
+				"resolvedAt": null,
+				"consecutiveFailures": 2,
+				"consecutiveSuccesses": 0,
+				"openAfterConsecutiveFailures": 2,
+				"resolveAfterConsecutiveSuccesses": 2
+			}
+		]
+	},
+	"notifiableEvents": [
+		{
+			"eventId": "incident_opened:geral:2026-06-29T12:00:00.000Z:2026-06-29T12:00:00.000Z",
+			"incidentId": "geral:2026-06-29T12:00:00.000Z",
+			"targetId": "geral",
+			"targetName": "Geral / Tudo",
+			"type": "incident_opened",
+			"status": "timeout",
+			"reason": "operation_timeout",
+			"severity": "critical",
+			"occurredAt": "2026-06-29T12:00:00.000Z",
+			"streakCount": 2,
+			"dedupeKey": "incident_opened:geral:2026-06-29T12:00:00.000Z"
+		}
+	],
+	"checkName": "public-listener-check"
+}
+```
+
+Eventos notificaveis nesta etapa:
+
+- incident_opened
+- incident_resolved
+
 ## Configuracao
 
 Variaveis suportadas:
@@ -141,4 +254,14 @@ No resultado individual de cada canal, os status possiveis continuam os mesmos:
 - stalled
 - timeout
 - unknown_error
+
+## Testes locais da camada de incidentes
+
+Depois de compilar, rode:
+
+```bash
+npm run test:incidents
+```
+
+Os testes sinteticos cobrem abertura critica, abertura warning, recuperacao, resolucao, troca de warning para falha critica e recuperacao de arquivo de estado corrompido.
 

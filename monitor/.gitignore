@@ -1,2 +1,4 @@
 dist/
+data/incidents-state.json
+data/incidents-state.json.bak
 node_modules/
