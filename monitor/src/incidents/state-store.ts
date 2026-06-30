@@ -37,6 +37,29 @@ type ReadStateAttempt =
 export const DEFAULT_INCIDENT_STATE_PATH = fileURLToPath(DEFAULT_STATE_FILE_URL);
 export const DEFAULT_INCIDENT_STATE_DISPLAY_PATH = "data/incidents-state.json";
 
+export function resolveIncidentStatePath(
+  configuredPath?: string | null,
+  baseDirectory: string = process.cwd()
+): { filePath: string; displayPath: string } {
+  const normalizedConfiguredPath = typeof configuredPath === "string" ? configuredPath.trim() : "";
+
+  if (!normalizedConfiguredPath) {
+    return {
+      filePath: DEFAULT_INCIDENT_STATE_PATH,
+      displayPath: DEFAULT_INCIDENT_STATE_DISPLAY_PATH
+    };
+  }
+
+  const filePath = path.isAbsolute(normalizedConfiguredPath)
+    ? normalizedConfiguredPath
+    : path.resolve(baseDirectory, normalizedConfiguredPath);
+
+  return {
+    filePath,
+    displayPath: filePath
+  };
+}
+
 export function createEmptyIncidentState(template: IncidentStateTemplate): IncidentStateSnapshot {
   return {
     schemaVersion: INCIDENT_STATE_SCHEMA_VERSION,

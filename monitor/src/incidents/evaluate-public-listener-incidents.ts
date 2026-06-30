@@ -6,11 +6,10 @@ import type {
 } from "../checks/public-listener-check/types.js";
 import { classifyIncidentPolicy, INCIDENT_POLICY } from "./policy.js";
 import {
-  DEFAULT_INCIDENT_STATE_DISPLAY_PATH,
-  DEFAULT_INCIDENT_STATE_PATH,
   createClosedIncidentState,
   createEmptyTargetState,
   loadIncidentState,
+  resolveIncidentStatePath,
   saveIncidentState
 } from "./state-store.js";
 import type {
@@ -26,7 +25,6 @@ import type {
 
 interface EvaluateOptions {
   stateFilePath?: string;
-  stateFileDisplayPath?: string;
 }
 
 export async function evaluatePublicListenerIncidents(
@@ -34,17 +32,16 @@ export async function evaluatePublicListenerIncidents(
   options: EvaluateOptions = {}
 ): Promise<EvaluatePublicListenerIncidentsResult> {
   const evaluatedAt = new Date().toISOString();
-  const stateFilePath = options.stateFilePath ?? DEFAULT_INCIDENT_STATE_PATH;
-  const stateFileDisplayPath = options.stateFileDisplayPath ?? DEFAULT_INCIDENT_STATE_DISPLAY_PATH;
+  const stateStore = resolveIncidentStatePath(options.stateFilePath);
   const template = {
     updatedAt: evaluatedAt,
     checkName: diagnostic.checkName,
     checkVersion: diagnostic.checkVersion,
     policySnapshot: INCIDENT_POLICY
   };
-  const { state: currentState, meta: loadMeta } = await loadIncidentState(stateFilePath, template);
+  const { state: currentState, meta: loadMeta } = await loadIncidentState(stateStore.filePath, template);
   const normalizedTargets = normalizeDiagnosticTargets(diagnostic);
-  const nextTargets: IncidentStateSnapshot["targets"] = { ...currentState.targets };
+  const nextTargets: IncidentStateSnapshot["targets"] = {};
   const targetResults: IncidentEvaluationTargetResult[] = [];
   const notifiableEvents: NotifiableIncidentEvent[] = [];
 
@@ -64,7 +61,7 @@ export async function evaluatePublicListenerIncidents(
     policySnapshot: INCIDENT_POLICY,
     targets: nextTargets
   };
-  const writeMeta = await saveIncidentState(stateFilePath, nextState);
+  const writeMeta = await saveIncidentState(stateStore.filePath, nextState);
 
   return {
     incidentEvaluation: {
@@ -75,7 +72,7 @@ export async function evaluatePublicListenerIncidents(
       policySnapshot: INCIDENT_POLICY,
       summary: buildSummary(targetResults),
       stateStore: {
-        path: stateFileDisplayPath,
+        path: stateStore.displayPath,
         loadSource: loadMeta.loadSource,
         recoveredFromCorruption: loadMeta.recoveredFromCorruption,
         loadError: loadMeta.loadError,

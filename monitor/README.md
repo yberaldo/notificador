@@ -96,10 +96,13 @@ O exit code e 0 somente quando todos os canais estiverem healthy. Se um ou mais 
 
 Sem alterar o check principal, a CLI agora faz um pos-processamento local do diagnostico e persiste um snapshot em [data/incidents-state.json](data/incidents-state.json).
 
+Se PUBLIC_LISTENER_INCIDENT_STATE_PATH estiver definida, a CLI usa exatamente esse caminho como arquivo de estado. Se o valor for relativo, ele e resolvido a partir do diretorio corrente de execucao da CLI. Se a variavel nao estiver definida, o comportamento padrao continua igual em producao: [data/incidents-state.json](data/incidents-state.json).
+
 - o estado e snapshot, nao log infinito
 - a pasta data e criada automaticamente quando necessario
 - a escrita usa arquivo temporario, rename e backup unico em [data/incidents-state.json.bak](data/incidents-state.json.bak)
 - o snapshot nao persiste evidence, stderrSnippet nem stdoutSnippet
+- targets que nao aparecem mais no diagnostico atual sao removidos do snapshot final sem gerar evento notificavel nessa etapa
 
 Politica atual:
 
@@ -205,12 +208,15 @@ Eventos notificaveis nesta etapa:
 - incident_opened
 - incident_resolved
 
+Quando PUBLIC_LISTENER_INCIDENT_STATE_PATH for usada, incidentEvaluation.stateStore.path passa a refletir o caminho efetivamente resolvido e utilizado pela execucao.
+
 ## Configuracao
 
 Variaveis suportadas:
 
 - PUBLIC_LISTENER_URL
 - PUBLIC_LISTENER_TARGETS_JSON
+- PUBLIC_LISTENER_INCIDENT_STATE_PATH
 - PUBLIC_LISTENER_USER_AGENT
 - PUBLIC_LISTENER_TOTAL_TIMEOUT_MS
 - PUBLIC_LISTENER_SAMPLE_DURATION_SECONDS
@@ -234,6 +240,14 @@ Argumentos equivalentes simples:
 - --ffmpeg-path
 - --ffprobe-path
 - --debug
+
+Exemplo de simulacao manual sem tocar no snapshot real do projeto:
+
+```bash
+PUBLIC_LISTENER_INCIDENT_STATE_PATH=./tmp/incidents-state.sim.json node dist/cli.js
+```
+
+No exemplo acima, ./tmp/incidents-state.sim.json sera resolvido a partir do diretorio corrente de execucao da CLI.
 
 ## Deploy Ubuntu
 
@@ -263,5 +277,5 @@ Depois de compilar, rode:
 npm run test:incidents
 ```
 
-Os testes sinteticos cobrem abertura critica, abertura warning, recuperacao, resolucao, troca de warning para falha critica e recuperacao de arquivo de estado corrompido.
+Os testes sinteticos cobrem caminho configurado de state store, resolucao de caminho relativo, abertura critica, abertura warning, recuperacao, resolucao, troca de warning para falha critica, limpeza de targets obsoletos e recuperacao de arquivo de estado corrompido.
 

@@ -97,7 +97,9 @@ function resolveOverallStatus(
 async function writeDiagnosticOutput(
   diagnostic: PublicListenerDiagnostic | PublicListenerMultiDiagnostic
 ): Promise<void> {
-  const { incidentEvaluation, notifiableEvents } = await evaluatePublicListenerIncidents(diagnostic);
+  const { incidentEvaluation, notifiableEvents } = await evaluatePublicListenerIncidents(diagnostic, {
+    stateFilePath: process.env.PUBLIC_LISTENER_INCIDENT_STATE_PATH
+  });
 
   process.stdout.write(
     `${JSON.stringify(
