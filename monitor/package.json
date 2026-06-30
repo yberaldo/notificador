@@ -5,13 +5,15 @@
   "description": "CLI local para verificar se o stream publico da Radio Cabrito esta audivel.",
   "type": "module",
   "bin": {
-    "public-listener-check": "./dist/cli.js"
+    "public-listener-check": "./dist/cli.js",
+    "radio-cabrito-dispatch-outbox": "./dist/incidents/dispatch-outbox-cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli.ts",
-    "test:incidents": "node --test dist/incidents/evaluate-public-listener-incidents.test.js dist/incidents/outbox-store.test.js"
+    "dispatch:outbox": "node dist/incidents/dispatch-outbox-cli.js",
+    "test:incidents": "node --test dist/incidents/evaluate-public-listener-incidents.test.js dist/incidents/outbox-store.test.js dist/incidents/dispatch-outbox.test.js"
   },
   "engines": {
     "node": ">=20"

@@ -116,6 +116,67 @@ Se PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH estiver definida, a CLI usa exatamente e
 - retencao de sent e discarded fica documentada como etapa futura
 - ordem critica de persistencia: o outbox e salvo antes do snapshot de incidentes para evitar perder transicoes se a CLI cair entre as duas escritas
 
+## Dispatcher local do outbox
+
+O monitor agora tambem inclui um segundo comando CLI separado para consumir o outbox local sem alterar o fluxo atual do check principal.
+
+Comandos disponiveis:
+
+- bin: radio-cabrito-dispatch-outbox
+- npm script: npm run dispatch:outbox
+- build final: dist/incidents/dispatch-outbox-cli.js
+
+Nesta fase 1, o dispatcher ainda nao envia nada para fora da VPS. Ele apenas consome o outbox local e executa adapters internos de simulacao.
+
+Comportamento atual do dispatcher:
+
+- usa o mesmo path do outbox ja existente, controlado por PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH
+- se a variavel nao estiver definida, continua usando data/notifiable-events-outbox.json
+- cria um lock local em <outbox>.lock para impedir dois dispatchers simultaneos
+- o lock guarda pid, createdAt e expiresAt
+- se um lock valido ja existir, o comando encerra com skippedBecauseLocked = true
+- eventos elegiveis sao pending e failed cujo backoff ja venceu
+- a ordem de processamento e queuedAt e depois eventId
+- antes de chamar o adapter, o dispatcher incrementa attempts, atualiza lastAttemptAt e salva o outbox imediatamente
+- se o adapter retornar sucesso, o evento vira sent
+- se o adapter retornar erro retryable, o evento vira failed
+- se o adapter retornar erro permanente, o evento vira discarded
+- se o evento ja tiver atingido o limite de tentativas, ele tambem vira discarded sem nova chamada ao adapter
+- nesta fase nao existe status intermediario processing
+
+Adapters locais disponiveis:
+
+- log: adapter padrao; escreve um resumo do evento no stderr do processo e marca sucesso
+- noop: nao entrega nada e so simula sucesso, erro retryable ou erro permanente
+
+Variaveis de ambiente do dispatcher:
+
+- PUBLIC_LISTENER_DISPATCH_ADAPTER=log|noop
+- PUBLIC_LISTENER_DISPATCH_NOOP_MODE=success|retryable_error|permanent_error
+- PUBLIC_LISTENER_DISPATCH_LOCK_TTL_MS, padrao 600000
+- PUBLIC_LISTENER_DISPATCH_RETRY_BASE_MS, padrao 300000
+- PUBLIC_LISTENER_DISPATCH_RETRY_MAX_MS, padrao 21600000
+- PUBLIC_LISTENER_DISPATCH_MAX_ATTEMPTS, padrao 10
+
+Exemplos:
+
+```bash
+npm run dispatch:outbox
+```
+
+```bash
+PUBLIC_LISTENER_DISPATCH_ADAPTER=noop \
+PUBLIC_LISTENER_DISPATCH_NOOP_MODE=retryable_error \
+node dist/incidents/dispatch-outbox-cli.js
+```
+
+Semantica atual:
+
+- o dispatcher opera em modelo at-least-once
+- se um adapter futuro confirmar envio externo e o processo cair antes de gravar status sent, o mesmo evento pode ser tentado novamente numa rodada futura
+- por isso, adapters externos futuros devem usar chaves estaveis como eventId ou dedupeKey para idempotencia do lado do destino
+- o adapter log e o adapter noop existem exatamente para validar esse fluxo sem disparar notificacoes reais
+
 Politica atual:
 
 - falhas estruturais locais do monitor abrem com 1 ocorrencia
