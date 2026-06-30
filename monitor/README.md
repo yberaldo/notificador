@@ -96,13 +96,25 @@ O exit code e 0 somente quando todos os canais estiverem healthy. Se um ou mais 
 
 Sem alterar o check principal, a CLI agora faz um pos-processamento local do diagnostico e persiste um snapshot em [data/incidents-state.json](data/incidents-state.json).
 
+Os eventos notificaveis calculados em notifiableEvents tambem passam por um outbox local persistente em [data/notifiable-events-outbox.json](data/notifiable-events-outbox.json).
+
 Se PUBLIC_LISTENER_INCIDENT_STATE_PATH estiver definida, a CLI usa exatamente esse caminho como arquivo de estado. Se o valor for relativo, ele e resolvido a partir do diretorio corrente de execucao da CLI. Se a variavel nao estiver definida, o comportamento padrao continua igual em producao: [data/incidents-state.json](data/incidents-state.json).
+
+Se PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH estiver definida, a CLI usa exatamente esse caminho como arquivo de outbox. Se o valor for relativo, ele tambem e resolvido a partir do diretorio corrente de execucao da CLI. Se a variavel nao estiver definida, o comportamento padrao continua igual em producao: [data/notifiable-events-outbox.json](data/notifiable-events-outbox.json).
 
 - o estado e snapshot, nao log infinito
 - a pasta data e criada automaticamente quando necessario
 - a escrita usa arquivo temporario, rename e backup unico em [data/incidents-state.json.bak](data/incidents-state.json.bak)
+- o outbox tambem usa snapshot JSON, nao JSONL
+- a escrita do outbox usa arquivo temporario, rename e backup unico em [data/notifiable-events-outbox.json.bak](data/notifiable-events-outbox.json.bak)
 - o snapshot nao persiste evidence, stderrSnippet nem stdoutSnippet
 - targets que nao aparecem mais no diagnostico atual sao removidos do snapshot final sem gerar evento notificavel nessa etapa
+- o outbox faz dedupe por dedupeKey
+- eventos novos entram com status pending
+- nesta etapa nao existe entregador externo; status sent, failed e discarded ficam reservados para a proxima fase
+- nao ha poda automatica de pending nesta etapa
+- retencao de sent e discarded fica documentada como etapa futura
+- ordem critica de persistencia: o outbox e salvo antes do snapshot de incidentes para evitar perder transicoes se a CLI cair entre as duas escritas
 
 Politica atual:
 
@@ -162,6 +174,17 @@ Formato resumido:
 			"writeSucceeded": true,
 			"writeError": null
 		},
+		"outbox": {
+			"path": "data/notifiable-events-outbox.json",
+			"loadSource": "primary",
+			"recoveredFromCorruption": false,
+			"loadError": null,
+			"queuedCount": 1,
+			"duplicateCount": 0,
+			"entryCount": 1,
+			"writeSucceeded": true,
+			"writeError": null
+		},
 		"targets": [
 			{
 				"targetId": "geral",
@@ -174,7 +197,7 @@ Formato resumido:
 				"structuralFailure": false,
 				"transition": "opened",
 				"incidentState": "open",
-				"incidentId": "geral:2026-06-29T12:00:00.000Z",
+				"incidentId": "geral:2026-06-29T11:58:00.000Z",
 				"openedAt": "2026-06-29T12:00:00.000Z",
 				"resolvedAt": null,
 				"consecutiveFailures": 2,
@@ -186,8 +209,8 @@ Formato resumido:
 	},
 	"notifiableEvents": [
 		{
-			"eventId": "incident_opened:geral:2026-06-29T12:00:00.000Z:2026-06-29T12:00:00.000Z",
-			"incidentId": "geral:2026-06-29T12:00:00.000Z",
+			"eventId": "incident_opened:geral:2026-06-29T11:58:00.000Z:2026-06-29T12:00:00.000Z",
+			"incidentId": "geral:2026-06-29T11:58:00.000Z",
 			"targetId": "geral",
 			"targetName": "Geral / Tudo",
 			"type": "incident_opened",
@@ -196,10 +219,42 @@ Formato resumido:
 			"severity": "critical",
 			"occurredAt": "2026-06-29T12:00:00.000Z",
 			"streakCount": 2,
-			"dedupeKey": "incident_opened:geral:2026-06-29T12:00:00.000Z"
+			"dedupeKey": "incident_opened:geral:2026-06-29T11:58:00.000Z"
 		}
 	],
 	"checkName": "public-listener-check"
+}
+```
+
+Formato do arquivo de outbox:
+
+```json
+{
+	"schemaVersion": 1,
+	"updatedAt": "2026-06-29T12:00:00.000Z",
+	"entries": [
+		{
+			"dedupeKey": "incident_opened:geral:2026-06-29T11:58:00.000Z",
+			"eventId": "incident_opened:geral:2026-06-29T11:58:00.000Z:2026-06-29T12:00:00.000Z",
+			"incidentId": "geral:2026-06-29T11:58:00.000Z",
+			"targetId": "geral",
+			"targetName": "Geral / Tudo",
+			"type": "incident_opened",
+			"status": "pending",
+			"reason": "operation_timeout",
+			"severity": "critical",
+			"occurredAt": "2026-06-29T12:00:00.000Z",
+			"streakCount": 2,
+			"queuedAt": "2026-06-29T12:00:01.000Z",
+			"updatedAt": "2026-06-29T12:00:01.000Z",
+			"lastSeenAt": "2026-06-29T12:00:00.000Z",
+			"attempts": 0,
+			"lastAttemptAt": null,
+			"sentAt": null,
+			"discardedAt": null,
+			"lastError": null
+		}
+	]
 }
 ```
 
@@ -210,6 +265,8 @@ Eventos notificaveis nesta etapa:
 
 Quando PUBLIC_LISTENER_INCIDENT_STATE_PATH for usada, incidentEvaluation.stateStore.path passa a refletir o caminho efetivamente resolvido e utilizado pela execucao.
 
+Quando PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH for usada, incidentEvaluation.outbox.path passa a refletir o caminho efetivamente resolvido e utilizado pela execucao.
+
 ## Configuracao
 
 Variaveis suportadas:
@@ -217,6 +274,7 @@ Variaveis suportadas:
 - PUBLIC_LISTENER_URL
 - PUBLIC_LISTENER_TARGETS_JSON
 - PUBLIC_LISTENER_INCIDENT_STATE_PATH
+- PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH
 - PUBLIC_LISTENER_USER_AGENT
 - PUBLIC_LISTENER_TOTAL_TIMEOUT_MS
 - PUBLIC_LISTENER_SAMPLE_DURATION_SECONDS
@@ -248,6 +306,22 @@ PUBLIC_LISTENER_INCIDENT_STATE_PATH=./tmp/incidents-state.sim.json node dist/cli
 ```
 
 No exemplo acima, ./tmp/incidents-state.sim.json sera resolvido a partir do diretorio corrente de execucao da CLI.
+
+Exemplo equivalente isolando state e outbox em caminhos temporarios:
+
+```bash
+PUBLIC_LISTENER_INCIDENT_STATE_PATH=./tmp/incidents-state.sim.json \
+PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH=./tmp/notifiable-events-outbox.sim.json \
+node dist/cli.js
+```
+
+Em Ubuntu ou em qualquer execucao com caminhos absolutos, o valor e usado como veio:
+
+```bash
+PUBLIC_LISTENER_INCIDENT_STATE_PATH=/tmp/incidents-state.sim.json \
+PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH=/tmp/notifiable-events-outbox.sim.json \
+node dist/cli.js
+```
 
 ## Deploy Ubuntu
 

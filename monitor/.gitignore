@@ -1,4 +1,6 @@
 dist/
 data/incidents-state.json
 data/incidents-state.json.bak
+data/notifiable-events-outbox.json
+data/notifiable-events-outbox.json.bak
 node_modules/

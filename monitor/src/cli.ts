@@ -98,7 +98,8 @@ async function writeDiagnosticOutput(
   diagnostic: PublicListenerDiagnostic | PublicListenerMultiDiagnostic
 ): Promise<void> {
   const { incidentEvaluation, notifiableEvents } = await evaluatePublicListenerIncidents(diagnostic, {
-    stateFilePath: process.env.PUBLIC_LISTENER_INCIDENT_STATE_PATH
+    stateFilePath: process.env.PUBLIC_LISTENER_INCIDENT_STATE_PATH,
+    outboxFilePath: process.env.PUBLIC_LISTENER_INCIDENT_OUTBOX_PATH
   });
 
   process.stdout.write(

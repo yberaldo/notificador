@@ -5,7 +5,10 @@ import path from "node:path";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import type { PublicListenerMultiDiagnostic, PublicListenerStatus, Severity } from "../checks/public-listener-check/types.js";
 import { evaluatePublicListenerIncidents } from "./evaluate-public-listener-incidents.js";
+import { DEFAULT_INCIDENT_OUTBOX_PATH } from "./outbox-store.js";
 import { DEFAULT_INCIDENT_STATE_PATH, resolveIncidentStatePath } from "./state-store.js";
+import type { IncidentOutboxSnapshot } from "./outbox-types.js";
+import type { IncidentStateSnapshot } from "./types.js";
 
 interface SyntheticTargetDiagnostic {
   targetId: string;
@@ -112,6 +115,11 @@ async function createStateFilePath(name: string): Promise<string> {
   return path.join(directoryPath, "data", "incidents-state.json");
 }
 
+async function createOutboxFilePath(name: string): Promise<string> {
+  const directoryPath = await mkdtemp(path.join(os.tmpdir(), `radio-cabrito-${name}-`));
+  return path.join(directoryPath, "data", "notifiable-events-outbox.json");
+}
+
 async function snapshotOptionalFile(filePath: string): Promise<OptionalFileSnapshot> {
   try {
     const [content, metadata] = await Promise.all([readFile(filePath, "utf8"), stat(filePath)]);
@@ -168,30 +176,203 @@ test("state path configurado grava fora do caminho padrao", async () => {
   assert.deepEqual(defaultStateAfter, defaultStateBefore);
 });
 
+test("outbox path configurado grava fora do caminho padrao", async () => {
+  const stateFilePath = await createStateFilePath("configured-outbox-state");
+  const outboxFilePath = await createOutboxFilePath("configured-outbox-path");
+  const defaultOutboxBefore = await snapshotOptionalFile(DEFAULT_INCIDENT_OUTBOX_PATH);
+
+  await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
+    stateFilePath,
+    outboxFilePath
+  });
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
+    stateFilePath,
+    outboxFilePath
+  });
+
+  assert.equal(evaluation.incidentEvaluation.outbox.path, outboxFilePath);
+  assert.equal(evaluation.incidentEvaluation.outbox.writeSucceeded, true);
+  assert.equal(evaluation.incidentEvaluation.outbox.queuedCount, 1);
+  assert.equal(evaluation.incidentEvaluation.outbox.duplicateCount, 0);
+
+  const storedOutbox = JSON.parse(await readFile(outboxFilePath, "utf8")) as IncidentOutboxSnapshot;
+  assert.equal(storedOutbox.entries.length, 1);
+  assert.equal(storedOutbox.entries[0]?.status, "pending");
+
+  const defaultOutboxAfter = await snapshotOptionalFile(DEFAULT_INCIDENT_OUTBOX_PATH);
+  assert.deepEqual(defaultOutboxAfter, defaultOutboxBefore);
+});
+
 test("healthy -> timeout -> timeout abre incidente critico", async () => {
   const stateFilePath = await createStateFilePath("critical-open");
+  const outboxFilePath = await createOutboxFilePath("critical-open");
 
   let evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
-    stateFilePath
+    stateFilePath,
+    outboxFilePath
   });
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "none");
 
   evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
+    stateFilePath,
+    outboxFilePath
   });
   assert.equal(evaluation.notifiableEvents.length, 0);
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "none");
   assert.equal(evaluation.incidentEvaluation.targets[0]?.consecutiveFailures, 1);
 
   evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
-    stateFilePath
+    stateFilePath,
+    outboxFilePath
   });
   assert.equal(evaluation.notifiableEvents.length, 1);
   assert.equal(evaluation.notifiableEvents[0]?.type, "incident_opened");
   assert.equal(evaluation.notifiableEvents[0]?.severity, "critical");
   assert.equal(evaluation.incidentEvaluation.targets[0]?.transition, "opened");
   assert.equal(evaluation.incidentEvaluation.targets[0]?.incidentState, "open");
+
+  const repeatedEvaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("timeout", "critical", "operation_timeout"), {
+    stateFilePath,
+    outboxFilePath
+  });
+
+  assert.equal(repeatedEvaluation.incidentEvaluation.outbox.queuedCount, 0);
+  assert.equal(repeatedEvaluation.incidentEvaluation.outbox.duplicateCount, 0);
+
+  const outbox = JSON.parse(await readFile(outboxFilePath, "utf8")) as IncidentOutboxSnapshot;
+  assert.equal(outbox.entries.length, 1);
+  assert.equal(outbox.entries[0]?.type, "incident_opened");
+});
+
+test("falha estrutural repetida nao duplica outbox e atualiza lastSeenAt", async () => {
+  const stateFilePath = await createStateFilePath("structural-dedupe");
+  const outboxFilePath = await createOutboxFilePath("structural-dedupe");
+
+  let evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), {
+    stateFilePath,
+    outboxFilePath
+  });
+
+  assert.equal(evaluation.notifiableEvents.length, 1);
+  assert.equal(evaluation.incidentEvaluation.outbox.queuedCount, 1);
+
+  const firstOutbox = JSON.parse(await readFile(outboxFilePath, "utf8")) as IncidentOutboxSnapshot;
+  assert.equal(firstOutbox.entries.length, 1);
+  const firstEntry = firstOutbox.entries[0];
+  assert.equal(firstEntry?.status, "pending");
+
+  evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), {
+    stateFilePath,
+    outboxFilePath
+  });
+
+  assert.equal(evaluation.notifiableEvents.length, 0);
+  assert.equal(evaluation.incidentEvaluation.outbox.queuedCount, 0);
+  assert.equal(evaluation.incidentEvaluation.outbox.duplicateCount, 0);
+
+  const secondOutbox = JSON.parse(await readFile(outboxFilePath, "utf8")) as IncidentOutboxSnapshot;
+  assert.equal(secondOutbox.entries.length, 1);
+  assert.equal(secondOutbox.entries[0]?.dedupeKey, firstEntry?.dedupeKey);
+});
+
+test("arquivo de outbox corrompido nao quebra a avaliacao", async () => {
+  const stateFilePath = await createStateFilePath("corrupted-outbox-state");
+  const outboxFilePath = await createOutboxFilePath("corrupted-outbox");
+  await mkdir(path.dirname(outboxFilePath), { recursive: true });
+  await writeFile(outboxFilePath, "{ invalid json", "utf8");
+
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
+    stateFilePath,
+    outboxFilePath
+  });
+
+  assert.equal(evaluation.incidentEvaluation.outbox.recoveredFromCorruption, true);
+  assert.equal(evaluation.incidentEvaluation.outbox.writeSucceeded, true);
+
+  const rewritten = JSON.parse(await readFile(outboxFilePath, "utf8")) as IncidentOutboxSnapshot;
+  assert.equal(rewritten.schemaVersion, 1);
+  assert.deepEqual(rewritten.entries, []);
+});
+
+test("outbox e salvo antes do incident state e erro no outbox impede salvar state com evento novo", async () => {
+  const stateFilePath = await createStateFilePath("ordering");
+  const outboxFilePath = await createOutboxFilePath("ordering");
+  const callOrder: string[] = [];
+
+  const evaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("connect_failed", "critical", "unsupported_protocol"), {
+    stateFilePath,
+    outboxFilePath,
+    persistence: {
+      async loadIncidentState(filePath, template) {
+        const { loadIncidentState } = await import("./state-store.js");
+        return loadIncidentState(filePath, template);
+      },
+      async loadIncidentOutbox(filePath, updatedAt) {
+        const { loadIncidentOutbox } = await import("./outbox-store.js");
+        return loadIncidentOutbox(filePath, updatedAt);
+      },
+      async saveIncidentOutbox() {
+        callOrder.push("outbox");
+        return {
+          writeSucceeded: false,
+          writeError: "simulated outbox failure"
+        };
+      },
+      async saveIncidentState() {
+        callOrder.push("state");
+        return {
+          writeSucceeded: true,
+          writeError: null
+        };
+      }
+    }
+  });
+
+  assert.deepEqual(callOrder, ["outbox"]);
+  assert.equal(evaluation.notifiableEvents.length, 1);
+  assert.equal(evaluation.incidentEvaluation.outbox.writeSucceeded, false);
+  assert.match(evaluation.incidentEvaluation.outbox.writeError ?? "", /simulated outbox failure/);
+  assert.equal(evaluation.incidentEvaluation.stateStore.writeSucceeded, false);
+  assert.match(evaluation.incidentEvaluation.stateStore.writeError ?? "", /nao foi salvo/);
+});
+
+test("se nao ha evento novo, falha no outbox nao bloqueia persistencia do state", async () => {
+  const stateFilePath = await createStateFilePath("ordering-no-new-events");
+  const outboxFilePath = await createOutboxFilePath("ordering-no-new-events");
+  const savedStates: IncidentStateSnapshot[] = [];
+
+  const firstEvaluation = await evaluatePublicListenerIncidents(createMultiDiagnostic("healthy", "none", "audio_decoded_without_continuous_silence"), {
+    stateFilePath,
+    outboxFilePath,
+    persistence: {
+      async loadIncidentState(filePath, template) {
+        const { loadIncidentState } = await import("./state-store.js");
+        return loadIncidentState(filePath, template);
+      },
+      async loadIncidentOutbox(filePath, updatedAt) {
+        const { loadIncidentOutbox } = await import("./outbox-store.js");
+        return loadIncidentOutbox(filePath, updatedAt);
+      },
+      async saveIncidentOutbox() {
+        return {
+          writeSucceeded: false,
+          writeError: "simulated outbox failure"
+        };
+      },
+      async saveIncidentState(_filePath, state) {
+        savedStates.push(state);
+        return {
+          writeSucceeded: true,
+          writeError: null
+        };
+      }
+    }
+  });
+
+  assert.equal(firstEvaluation.notifiableEvents.length, 0);
+  assert.equal(firstEvaluation.incidentEvaluation.outbox.queuedCount, 0);
+  assert.equal(savedStates.length, 1);
 });
 
 test("healthy -> silent -> silent -> silent abre incidente warning", async () => {

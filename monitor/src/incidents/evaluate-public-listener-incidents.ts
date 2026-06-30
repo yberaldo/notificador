@@ -6,6 +6,12 @@ import type {
 } from "../checks/public-listener-check/types.js";
 import { classifyIncidentPolicy, INCIDENT_POLICY } from "./policy.js";
 import {
+  loadIncidentOutbox,
+  resolveIncidentOutboxPath,
+  saveIncidentOutbox,
+  upsertIncidentOutboxEntries
+} from "./outbox-store.js";
+import {
   createClosedIncidentState,
   createEmptyTargetState,
   loadIncidentState,
@@ -25,21 +31,43 @@ import type {
 
 interface EvaluateOptions {
   stateFilePath?: string;
+  outboxFilePath?: string;
+  persistence?: Partial<{
+    loadIncidentState: typeof loadIncidentState;
+    saveIncidentState: typeof saveIncidentState;
+    loadIncidentOutbox: typeof loadIncidentOutbox;
+    saveIncidentOutbox: typeof saveIncidentOutbox;
+  }>;
 }
+
+const DEFAULT_PERSISTENCE = {
+  loadIncidentState,
+  saveIncidentState,
+  loadIncidentOutbox,
+  saveIncidentOutbox
+};
 
 export async function evaluatePublicListenerIncidents(
   diagnostic: PublicListenerDiagnosticInput,
   options: EvaluateOptions = {}
 ): Promise<EvaluatePublicListenerIncidentsResult> {
   const evaluatedAt = new Date().toISOString();
+  const persistence = {
+    ...DEFAULT_PERSISTENCE,
+    ...options.persistence
+  };
   const stateStore = resolveIncidentStatePath(options.stateFilePath);
+  const outboxStore = resolveIncidentOutboxPath(options.outboxFilePath);
   const template = {
     updatedAt: evaluatedAt,
     checkName: diagnostic.checkName,
     checkVersion: diagnostic.checkVersion,
     policySnapshot: INCIDENT_POLICY
   };
-  const { state: currentState, meta: loadMeta } = await loadIncidentState(stateStore.filePath, template);
+  const [{ state: currentState, meta: loadMeta }, { outbox: currentOutbox, meta: outboxLoadMeta }] = await Promise.all([
+    persistence.loadIncidentState(stateStore.filePath, template),
+    persistence.loadIncidentOutbox(outboxStore.filePath, evaluatedAt)
+  ]);
   const normalizedTargets = normalizeDiagnosticTargets(diagnostic);
   const nextTargets: IncidentStateSnapshot["targets"] = {};
   const targetResults: IncidentEvaluationTargetResult[] = [];
@@ -61,7 +89,15 @@ export async function evaluatePublicListenerIncidents(
     policySnapshot: INCIDENT_POLICY,
     targets: nextTargets
   };
-  const writeMeta = await saveIncidentState(stateStore.filePath, nextState);
+  const outboxUpsert = upsertIncidentOutboxEntries(currentOutbox, notifiableEvents, evaluatedAt);
+  const outboxWriteMeta = await persistence.saveIncidentOutbox(outboxStore.filePath, outboxUpsert.outbox);
+  const shouldPersistState = outboxWriteMeta.writeSucceeded || outboxUpsert.queuedCount === 0;
+  const writeMeta = shouldPersistState
+    ? await persistence.saveIncidentState(stateStore.filePath, nextState)
+    : {
+        writeSucceeded: false,
+        writeError: buildSkippedStateWriteError(outboxUpsert.queuedCount, outboxWriteMeta.writeError)
+      };
 
   return {
     incidentEvaluation: {
@@ -78,6 +114,17 @@ export async function evaluatePublicListenerIncidents(
         loadError: loadMeta.loadError,
         writeSucceeded: writeMeta.writeSucceeded,
         writeError: writeMeta.writeError
+      },
+      outbox: {
+        path: outboxStore.displayPath,
+        loadSource: outboxLoadMeta.loadSource,
+        recoveredFromCorruption: outboxLoadMeta.recoveredFromCorruption,
+        loadError: outboxLoadMeta.loadError,
+        queuedCount: outboxUpsert.queuedCount,
+        duplicateCount: outboxUpsert.duplicateCount,
+        entryCount: outboxUpsert.outbox.entries.length,
+        writeSucceeded: outboxWriteMeta.writeSucceeded,
+        writeError: outboxWriteMeta.writeError
       },
       targets: targetResults
     },
@@ -244,7 +291,7 @@ function evaluateTarget(previousState: IncidentTargetState, input: ReturnType<ty
   }
 
   if (policy.openAfterConsecutiveFailures !== null && consecutiveFailures >= policy.openAfterConsecutiveFailures) {
-    const incidentId = `${input.targetId}:${now}`;
+    const incidentId = buildIncidentId(previousState, input);
     const event = buildEvent(
       "incident_opened",
       incidentId,
@@ -326,6 +373,23 @@ function buildEvaluationResult(
     openAfterConsecutiveFailures,
     resolveAfterConsecutiveSuccesses
   };
+}
+
+function buildIncidentId(
+  previousState: IncidentTargetState,
+  input: ReturnType<typeof normalizeDiagnosticTargets>[number]
+): string {
+  const originKey = previousState.streak.firstFailureAt
+    ?? previousState.streak.lastHealthyAt
+    ?? previousState.lastCheck?.checkedAt
+    ?? "fresh";
+
+  return `${input.targetId}:${originKey}`;
+}
+
+function buildSkippedStateWriteError(queuedCount: number, writeError: string | null): string {
+  const prefix = `incident state nao foi salvo para evitar perder ${queuedCount} evento(s) novo(s) do outbox.`;
+  return writeError ? `${prefix} Erro do outbox: ${writeError}` : prefix;
 }
 
 function buildSummary(results: IncidentEvaluationTargetResult[]): IncidentEvaluationSummary {

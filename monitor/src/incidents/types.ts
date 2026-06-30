@@ -5,6 +5,7 @@ import type {
   PublicListenerStatus,
   Severity
 } from "../checks/public-listener-check/types.js";
+import type { IncidentOutboxStoreMeta } from "./outbox-types.js";
 
 export const INCIDENT_STATE_SCHEMA_VERSION = 1;
 
@@ -146,6 +147,7 @@ export interface PublicListenerIncidentEvaluation {
   policySnapshot: IncidentPolicySnapshot;
   summary: IncidentEvaluationSummary;
   stateStore: IncidentStateStoreMeta;
+  outbox: IncidentOutboxStoreMeta;
   targets: IncidentEvaluationTargetResult[];
 }
 
