@@ -6,14 +6,17 @@
   "type": "module",
   "bin": {
     "public-listener-check": "./dist/cli.js",
-    "radio-cabrito-dispatch-outbox": "./dist/incidents/dispatch-outbox-cli.js"
+    "radio-cabrito-dispatch-outbox": "./dist/incidents/dispatch-outbox-cli.js",
+    "telegram-status-bot": "./dist/telegram-status-bot/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/cli.ts",
     "dispatch:outbox": "node dist/incidents/dispatch-outbox-cli.js",
-    "test:incidents": "node --test dist/incidents/evaluate-public-listener-incidents.test.js dist/incidents/outbox-store.test.js dist/incidents/dispatch-outbox.test.js"
+    "telegram:status-bot": "node dist/telegram-status-bot/cli.js",
+    "test:incidents": "node --test dist/incidents/evaluate-public-listener-incidents.test.js dist/incidents/outbox-store.test.js dist/incidents/dispatch-outbox.test.js",
+    "test:telegram-status-bot": "node --test dist/telegram-status-bot/telegram-status-bot.test.js"
   },
   "engines": {
     "node": ">=20"

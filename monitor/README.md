@@ -238,6 +238,90 @@ Semantica atual:
 - o adapter log e o adapter noop existem exatamente para validar esse fluxo sem disparar notificacoes reais
 - o adapter Telegram pode gerar duplicidade visivel ao operador se a mensagem for enviada com sucesso e o processo cair antes de persistir status sent
 
+## Bot Telegram de status sob demanda
+
+O monitor tambem inclui um CLI separado para responder perguntas de status feitas ao bot Telegram.
+
+Comandos disponiveis:
+
+- bin: telegram-status-bot
+- npm script: npm run telegram:status-bot
+- build final: dist/telegram-status-bot/cli.js
+
+Esse CLI usa Telegram getUpdates com long polling e responde somente ao chat configurado em PUBLIC_LISTENER_TELEGRAM_CHAT_ID. Mensagens de outros chats sao ignoradas silenciosamente e o offset avanca para evitar repeticao.
+
+Comandos aceitos no Telegram:
+
+- /status
+- status
+- online
+- tao online?
+- tão online?
+
+Fluxo da resposta:
+
+1. o bot recebe o update autorizado
+2. responde imediatamente:
+
+```text
+⏳ Checando players agora...
+```
+
+3. executa uma nova checagem real dos targets configurados em PUBLIC_LISTENER_TARGETS_JSON
+4. responde:
+
+```text
+📻 Status dos players
+Geral / Tudo: ONLINE
+Modao: ONLINE
+Festa / Universitario: ONLINE
+```
+
+Para cada target, healthy vira ONLINE. Qualquer outro status vira OFFLINE.
+
+Importante: esse comando nao usa [data/incidents-state.json](data/incidents-state.json) como fonte principal do status, nao usa [data/notifiable-events-outbox.json](data/notifiable-events-outbox.json) e nao chama dist/cli.js. Ele reaproveita diretamente a logica real de checagem do public-listener-check.
+
+Variaveis reutilizadas:
+
+- PUBLIC_LISTENER_TELEGRAM_BOT_TOKEN
+- PUBLIC_LISTENER_TELEGRAM_CHAT_ID
+- PUBLIC_LISTENER_TELEGRAM_API_BASE_URL, padrao https://api.telegram.org
+- PUBLIC_LISTENER_TELEGRAM_TIMEOUT_MS, padrao 10000
+- PUBLIC_LISTENER_TELEGRAM_THREAD_ID, opcional para grupos com topicos
+- PUBLIC_LISTENER_TARGETS_JSON
+
+Variaveis especificas do bot de status:
+
+- PUBLIC_LISTENER_TELEGRAM_STATUS_OFFSET_PATH, padrao data/telegram-status-offset.json
+- PUBLIC_LISTENER_TELEGRAM_STATUS_POLL_TIMEOUT_SECONDS, padrao 25
+- PUBLIC_LISTENER_TELEGRAM_STATUS_ONCE=true|false, padrao false
+
+Formato do offset:
+
+```json
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-01T12:00:00.000Z",
+  "offset": 123456789
+}
+```
+
+Na primeira execucao, se o arquivo de offset nao existir, o CLI faz bootstrap seguro: chama getUpdates, nao responde mensagens antigas, grava o maior update_id + 1 e encerra se estiver em modo once.
+
+Exemplo de validacao manual em uma unica rodada:
+
+```bash
+PUBLIC_LISTENER_TELEGRAM_STATUS_ONCE=true node dist/telegram-status-bot/cli.js
+```
+
+Enquanto uma checagem esta em andamento, outro comando valido recebe:
+
+```text
+⏳ Já estou checando os players. Tente novamente em instantes.
+```
+
+O token do Telegram nao deve aparecer em logs. Erros que contenham caminhos /bot<TOKEN>/getUpdates ou /bot<TOKEN>/sendMessage sao sanitizados.
+
 Politica atual:
 
 - falhas estruturais locais do monitor abrem com 1 ocorrencia
@@ -406,6 +490,9 @@ Variaveis suportadas:
 - PUBLIC_LISTENER_FFMPEG_PATH
 - PUBLIC_LISTENER_FFPROBE_PATH
 - PUBLIC_LISTENER_DEBUG
+- PUBLIC_LISTENER_TELEGRAM_STATUS_OFFSET_PATH
+- PUBLIC_LISTENER_TELEGRAM_STATUS_POLL_TIMEOUT_SECONDS
+- PUBLIC_LISTENER_TELEGRAM_STATUS_ONCE
 
 Argumentos equivalentes simples:
 
@@ -474,4 +561,3 @@ npm run test:incidents
 ```
 
 Os testes sinteticos cobrem caminho configurado de state store, resolucao de caminho relativo, abertura critica, abertura warning, recuperacao, resolucao, troca de warning para falha critica, limpeza de targets obsoletos e recuperacao de arquivo de estado corrompido.
-
